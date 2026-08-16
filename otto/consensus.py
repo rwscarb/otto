@@ -64,21 +64,25 @@ class ConsensusEngine:
     """
     Stateful engine. Feed DetectionPayloads via `ingest()`; collect
     ConfirmedPayloads via `drain_confirmed()`.
+
+    `_now_fn` overrides the clock — use in tests to control time.
     """
 
     def __init__(self,
                  min_nodes: int = MIN_NODES,
                  min_spread_km: float = MIN_SPREAD_KM,
-                 window_s: float = CONSENSUS_WINDOW_S):
+                 window_s: float = CONSENSUS_WINDOW_S,
+                 _now_fn=None):
         self.min_nodes     = min_nodes
         self.min_spread_km = min_spread_km
         self.window_s      = window_s
+        self._now_fn       = _now_fn or time.time
         self._pending: list[tuple[float, DetectionPayload]] = []   # (ingested_at, payload)
         self._confirmed: list[ConfirmedPayload] = []
         self._fired_ids: set[str] = set()   # confirmed_ids already emitted
 
     def ingest(self, payload: DetectionPayload) -> None:
-        now = time.time()
+        now = self._now_fn()
         self._pending.append((now, payload))
         self._expire(now)
         self._try_confirm(now)
@@ -88,12 +92,13 @@ class ConsensusEngine:
         return out
 
     def _expire(self, now: float) -> None:
-        cutoff = now - self.window_s * 2
-        self._pending = [(t, p) for t, p in self._pending if t >= cutoff]
+        # Expire by ingest time AND by p_arrival — keep anything recent by either
+        cutoff_ingest = now - self.window_s * 2
+        self._pending = [(t, p) for t, p in self._pending
+                         if t >= cutoff_ingest or p.p_arrival >= now - self.window_s * 2]
 
     def _try_confirm(self, now: float) -> None:
-        cutoff_arr = now - self.window_s
-        candidates = [p for _, p in self._pending if p.p_arrival >= cutoff_arr]
+        candidates = [p for _, p in self._pending]
         if len(candidates) < self.min_nodes:
             return
 
@@ -106,17 +111,27 @@ class ConsensusEngine:
             if spread < self.min_spread_km:
                 continue
 
+            # Deduplicate by node_id set — same nodes can't re-confirm same event
+            node_set = frozenset(p.node_id for p in cluster)
+            if node_set in self._fired_ids:
+                continue
+            # Also block any superset/subset already fired
+            if any(node_set <= fired or fired <= node_set
+                   for fired in self._fired_ids):
+                continue
+            self._fired_ids.add(node_set)
+
+            # Remove used detections from pending so they can't seed another cluster
+            used_ids = {id(p) for p in cluster}
+            self._pending = [(t, p) for t, p in self._pending
+                             if id(p) not in used_ids]
+
             # Build confirmed event
             mean_arr  = sum(p.p_arrival for p in cluster) / len(cluster)
             mean_lat  = sum(p.lat for p in cluster) / len(cluster)
             mean_lon  = sum(p.lon for p in cluster) / len(cluster)
             mean_mag  = sum(p.mag_est for p in cluster) / len(cluster)
             arr_utc   = _unix_to_utc(mean_arr)
-            cid       = confirmed_id(arr_utc, mean_lat, mean_lon)
-
-            if cid in self._fired_ids:
-                continue
-            self._fired_ids.add(cid)
 
             confirmed = ConfirmedPayload(
                 p_arrival_utc = arr_utc,
@@ -127,6 +142,7 @@ class ConsensusEngine:
                 node_ids      = [p.node_id for p in cluster],
             )
             self._confirmed.append(confirmed)
+            break  # one confirmation per ingest call; re-check on next ingest
 
     def _cluster(self, payloads: list[DetectionPayload]) -> list[list[DetectionPayload]]:
         """Greedy clustering by pairwise arrival consistency."""

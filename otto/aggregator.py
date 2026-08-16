@@ -14,6 +14,7 @@ from typing import Optional
 from otto.events import DetectionPayload, KIND_DETECTION, KIND_CONFIRMED
 from otto.consensus import ConsensusEngine
 from otto.reputation import ReputationRegistry
+from otto.anchor import AnchorBuffer
 
 logger = logging.getLogger('otto.aggregator')
 
@@ -46,6 +47,7 @@ class OttoAggregator:
         self.relays  = relays or list(DEFAULT_RELAYS)
         self.engine  = ConsensusEngine()
         self.rep     = ReputationRegistry(path=reputation_path)
+        self.anchor  = AnchorBuffer()
         self._seen: set = set()   # deduplicate event ids across relays
 
     async def run(self) -> None:
@@ -102,6 +104,7 @@ class OttoAggregator:
                 for node_id in c.node_ids:
                     # Approximate lat/lon from confirmed centroid for now
                     self.rep.record_confirmed(node_id, c.lat, c.lon)
+                self.anchor.add(c)
                 await self._publish_confirmed(c)
 
     async def _publish_confirmed(self, confirmed) -> None:
