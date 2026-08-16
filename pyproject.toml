@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "otto"
+version = "0.1.0"
+description = "Decentralized open seismic monitoring network"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+keywords = ["seismology", "earthquake", "nostr", "decentralized", "p2p"]
+
+dependencies = [
+    "websockets>=12.0",
+    "coincurve>=20.0",   # Schnorr signing for Nostr
+]
+
+[project.optional-dependencies]
+sensor = [
+    "obspy>=1.4",
+    "numpy>=1.24",
+    "torch>=2.0",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]
+
+[project.urls]
+Repository = "https://github.com/rwscarb/otto"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
